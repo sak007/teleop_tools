@@ -138,6 +138,9 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
         self.name = name
 
         self.topic_type = get_interface_type(config['interface_type'], 'msg')
+        
+        self.speedScale = 1
+        self.prev = 0
 
         # A 'message_value' is a fixed message that is sent in response to an activation.  It is
         # mutually exclusive with an 'axis_mapping'.
@@ -172,6 +175,10 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
                     if 'scale' not in values:
                         raise JoyTeleopException("Axis mapping for '{}' must have a scale"
                                                  .format(name))
+                    # else:
+                    #     if values['axis'] == 1:
+                    #         values['scale'] = self.speedScale
+
 
         if self.msg_value is None and not self.axis_mappings:
             raise JoyTeleopException("No 'message_value' or 'axis_mappings' "
@@ -186,7 +193,17 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
                                    durability=rclpy.qos.QoSDurabilityPolicy.VOLATILE)
 
         self.pub = node.create_publisher(self.topic_type, config['topic_name'], qos)
+    
+    def setSpeedScale(self, val, node):
+        if self.prev == val:
+            return
+        self.speedScale += val/4.0
+        if self.speedScale > 5:
+            self.speedScale = 5
 
+        if self.speedScale < 0:
+            self.speedScale = 0
+    
     def run(self, node: Node, joy_state: sensor_msgs.msg.Joy) -> None:
         # The logic for responding to this joystick press is:
         # 1.  Save off the current state of active.
@@ -211,12 +228,23 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
         else:
             # This is the case to forward along mappings.
             msg = self.topic_type()
+            self.setSpeedScale(joy_state.axes[7], node)
+            self.prev = joy_state.axes[7]
 
             for mapping, values in self.axis_mappings.items():
                 if 'axis' in values:
                     if len(joy_state.axes) > values['axis']:
-                        val = joy_state.axes[values['axis']] * values.get('scale', 1.0) + \
+                        # node.get_logger().info('Debug: {}'.format(joy_state.axes))
+                        
+                        scale = values.get('scale', 1.0)
+                        
+                        if values['axis'] == 1:
+                            scale = self.speedScale
+
+
+                        val = joy_state.axes[values['axis']] * scale + \
                             values.get('offset', 0.0)
+
                     else:
                         node.get_logger().error('Joystick has only {} axes (indexed from 0),'
                                                 'but #{} was referenced in config.'.format(
