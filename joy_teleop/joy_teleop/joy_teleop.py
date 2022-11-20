@@ -99,9 +99,11 @@ class JoyTeleopCommand:
         # or axes, the command may only activate on the first one until it toggles again.  But this
         # is a command-specific behavior, the base class only provides the mechanism.
         self.active = False
+        self.prev_state = False
 
-    def update_active_from_buttons_and_axes(self, joy_state: sensor_msgs.msg.Joy) -> None:
-        self.active = False
+    def update_active_from_buttons_and_axes(self, joy_state: sensor_msgs.msg.Joy, node) -> None:
+
+        # self.active = False
 
         if (self.min_button is not None and len(joy_state.buttons) <= self.min_button) and \
            (self.min_axis is not None and len(joy_state.axes) <= self.min_axis):
@@ -109,13 +111,19 @@ class JoyTeleopCommand:
             return
 
         for button in self.buttons:
-            if button == 'default' and sum(joy_state.buttons) == 0:
-                self.active = True
-            elif button == 'default' and sum(joy_state.buttons) > 0:
-                pass
+            # if button == 'default' and sum(joy_state.buttons) == 0:
+            #     self.active = True
+            # elif button == 'default' and sum(joy_state.buttons) > 0:
+            #     pass
+            if button =='default':
+                self.active = False
             else:
                 try:
-                    self.active |= joy_state.buttons[button] == 1
+                    if (self.prev_state != joy_state.buttons[button] and self.name == 'human_control'):
+                        self.active ^= joy_state.buttons[button] == 1
+                        self.prev_state = joy_state.buttons[button]
+                        self.speedScale = 0.5
+                    # node.get_logger().info('Debug: {} , {}, {}'.format(self.active, button, self.speedScale))
                 except IndexError:
                     # An index error can occur if this command is configured for multiple buttons
                     # like (0, 10), but the length of the joystick buttons is only 1.  Ignore these.
@@ -123,7 +131,8 @@ class JoyTeleopCommand:
 
         for axis in self.axes:
             try:
-                self.active |= joy_state.axes[axis] == 1.0
+                # self.active |= joy_state.axes[axis] == 1.0
+                pass
             except IndexError:
                 # An index error can occur if this command is configured for multiple buttons
                 # like (0, 10), but the length of the joystick buttons is only 1.  Ignore these.
@@ -139,7 +148,7 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
 
         self.topic_type = get_interface_type(config['interface_type'], 'msg')
         
-        self.speedScale = 1
+        self.speedScale = 0
         self.prev = 0
 
         # A 'message_value' is a fixed message that is sent in response to an activation.  It is
@@ -195,13 +204,18 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
         self.pub = node.create_publisher(self.topic_type, config['topic_name'], qos)
     
     def setSpeedScale(self, val, node):
+
+        if self.name != 'human_control':
+            return
+        # node.get_logger().info('Debug setSpeedScale: {}, {}, {}, {}'.format(self.active, val, self.prev, self.speedScale))
+
         if self.prev == val:
             return
-        self.speedScale += val/4.0
-        if self.speedScale > 5:
-            self.speedScale = 5
+        self.speedScale += val/2.0
+        if self.speedScale > 3.0:
+            self.speedScale = 3.0
 
-        if self.speedScale < 0:
+        if self.speedScale < 0.0:
             self.speedScale = 0
     
     def run(self, node: Node, joy_state: sensor_msgs.msg.Joy) -> None:
@@ -216,7 +230,8 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
         #     continue to be published without debouncing.
 
         last_active = self.active
-        self.update_active_from_buttons_and_axes(joy_state)
+        # node.get_logger().info('Active: {}'.format(self.active))
+        self.update_active_from_buttons_and_axes(joy_state, node)
         if not self.active:
             return
         if self.msg_value is not None and last_active == self.active:
@@ -234,16 +249,19 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
             for mapping, values in self.axis_mappings.items():
                 if 'axis' in values:
                     if len(joy_state.axes) > values['axis']:
-                        # node.get_logger().info('Debug: {}'.format(joy_state.axes))
                         
                         scale = values.get('scale', 1.0)
+                        # node.get_logger().info('Debug: {}'.format(mapping))
                         
-                        if values['axis'] == 1:
+                        if mapping == 'drive-speed' and self.name == 'human_control':
                             scale = self.speedScale
+                            node.get_logger().info('Debug: {}'.format(scale))
 
 
                         val = joy_state.axes[values['axis']] * scale + \
                             values.get('offset', 0.0)
+
+                        node.get_logger().info('Debug: {}'.format(val))
 
                     else:
                         node.get_logger().error('Joystick has only {} axes (indexed from 0),'
