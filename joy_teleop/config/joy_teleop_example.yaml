@@ -61,7 +61,12 @@ joy_teleop:
       message_value:
         data:
           value: 'Hello'
-
+      function:
+        rosBagStart:
+          buttons: [0]
+          cmd: "ros2 bag record chatter"
+        rosBagStop:
+          buttons: [1]
     array:
       type: topic
       interface_type: std_msgs/msg/UInt8MultiArray

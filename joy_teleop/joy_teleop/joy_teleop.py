@@ -42,6 +42,8 @@ from rclpy.parameter import PARAMETER_SEPARATOR_STRING
 from rosidl_runtime_py import set_message_fields
 import sensor_msgs.msg
 
+from subprocess import Popen
+
 
 class JoyTeleopException(Exception):
     pass
@@ -119,7 +121,8 @@ class JoyTeleopCommand:
                 self.active = False
             else:
                 try:
-                    if (self.prev_state != joy_state.buttons[button] and self.name == 'human_control'):
+                    if (self.prev_state != joy_state.buttons[button] and
+                            (self.name == 'human_control' or self.name == 'hello')):
                         self.active ^= joy_state.buttons[button] == 1
                         self.prev_state = joy_state.buttons[button]
                         self.speedScale = 0.5
@@ -150,6 +153,23 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
         
         self.speedScale = 0
         self.prev = 0
+
+        # A 'function' is a local function that is run in response to button press
+        if 'function' in config:
+            function_config = config['function']
+
+            self.functions = {}
+            for func, buttons in function_config.items():
+                for button in buttons['buttons']:
+                    if func == "rosBagStart":
+                        self.cmd = buttons['cmd']
+                    self.functions[button] = getattr(self, func)
+                    if button in self.buttons:
+                        raise JoyTeleopException("function button mapping for '{}' already defined in deadman_buttons"
+                                                 .format(button))
+                    else:
+                        self.buttons.append(button)
+
 
         # A 'message_value' is a fixed message that is sent in response to an activation.  It is
         # mutually exclusive with an 'axis_mapping'.
@@ -217,6 +237,15 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
 
         if self.speedScale < 0.0:
             self.speedScale = 0
+
+    def rosBagStart(self, node: Node):
+        self.p = Popen(self.cmd.split(" "))
+        node.get_logger().info("rosBagStart")
+        node.get_logger().info("running cmd: {}".format(self.cmd))
+
+    def rosBagStop(self, node: Node):
+        self.p.terminate()
+        node.get_logger().info("rosBagStop")
     
     def run(self, node: Node, joy_state: sensor_msgs.msg.Joy) -> None:
         # The logic for responding to this joystick press is:
@@ -236,6 +265,12 @@ class JoyTeleopTopicCommand(JoyTeleopCommand):
             return
         if self.msg_value is not None and last_active == self.active:
             return
+
+        # run local function
+        for button in self.buttons:
+            if joy_state.buttons[button] and button in self.functions:
+                self.functions[button](node)
+                return
 
         if self.msg_value is not None:
             # This is the case for a static message.
@@ -330,7 +365,7 @@ class JoyTeleopServiceCommand(JoyTeleopCommand):
         #     transition 0 -> 1, or that the service became ready since the last call.
 
         last_active = self.active
-        self.update_active_from_buttons_and_axes(joy_state)
+        self.update_active_from_buttons_and_axes(joy_state, node)
         if not self.active:
             return
         last_ready = self.client_ready
@@ -379,7 +414,7 @@ class JoyTeleopActionCommand(JoyTeleopCommand):
         #     transition 0 -> 1, or that the action became ready since the last call.
 
         last_active = self.active
-        self.update_active_from_buttons_and_axes(joy_state)
+        self.update_active_from_buttons_and_axes(joy_state, node)
         if not self.active:
             return
         last_ready = self.client_ready
